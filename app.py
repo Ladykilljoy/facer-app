@@ -103,4 +103,59 @@ def process_files(donations_file, names_file, workhours_file):
         # 4. Combine events and pivot to create the calendar
         calendar_events = pd.concat([worked_events, donated_events])
         worker_calendar = calendar_events.pivot_table(
-            index=['N
+            index=['Név', 'Metric'], 
+            columns='Day', 
+            values='Value', 
+            aggfunc='first',
+            fill_value=''
+        )
+        
+        # 5. Ensure the calendar is sorted and complete
+        worker_calendar = worker_calendar.reindex(['Worked', 'Donated'], level='Metric')
+        if not all_shifts_df.empty:
+            month_start = all_shifts_df['Date'].min()
+            days_in_month = pd.Period(month_start, 'M').days_in_month
+            worker_calendar = worker_calendar.reindex(columns=range(1, days_in_month + 1), fill_value='')
+
+        # --- Final Output Generation ---
+        output_df = final_df[['Név', 'Total Hours', 'Number of Donations', 'Total Donation Amount', 'Total Wage', 'Donations (Count) / Hour', 'ROI']]
+        output_df.rename(columns={'Név': 'Worker Name', 'Total Donation Amount': 'Total Donations (HUF)'}, inplace=True)
+        
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            output_df.to_excel(writer, index=False, sheet_name='Worker Performance')
+            worker_calendar.to_excel(writer, index=True, sheet_name='Worker Calendar')
+        
+        processed_data = output.getvalue()
+        return processed_data
+
+    except Exception as e:
+        st.error(f"An error occurred: {e}")
+        st.error("Please ensure the uploaded files are in the correct format and all columns are present.")
+        return None
+
+# --- Streamlit App Interface (Unchanged) ---
+st.set_page_config(page_title="Donation Statistics Generator", layout="centered")
+
+st.title("📊 Donation Statistics Generator")
+st.write("Upload the three required Excel files to generate the performance report.")
+
+donations_file = st.file_uploader("📁 1. Upload Donations File", type=["xlsx"])
+names_file = st.file_uploader("📁 2. Upload Names File", type=["xlsx"])
+workhours_file = st.file_uploader("📁 3. Upload Work Hours File", type=["xlsx"])
+
+if st.button("🚀 Generate Report"):
+    if donations_file and names_file and workhours_file:
+        with st.spinner("Processing files... this may take a moment."):
+            excel_data = process_files(donations_file, names_file, workhours_file)
+
+        if excel_data:
+            st.success("✅ Report generated successfully!")
+            st.download_button(
+                label="📥 Download Report",
+                data=excel_data,
+                file_name="worker_statistics_report.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+    else:
+        st.warning("⚠️ Please upload all three files to generate the report.")
