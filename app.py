@@ -66,7 +66,7 @@ def process_files(donations_file, names_file, workhours_file):
         final_df.fillna(0, inplace=True)
         final_df.replace([np.inf, -np.inf], 0, inplace=True)
 
-        # --- Sheet 2: Worker Calendar Logic (NEW) ---
+        # --- Sheet 2: Worker Calendar Logic ---
         
         # 1. Get a clean list of all shifts
         workhours_df[0] = workhours_df[0].ffill()
@@ -110,8 +110,16 @@ def process_files(donations_file, names_file, workhours_file):
             fill_value=''
         )
         
-        # 5. Ensure the calendar is sorted and complete
-        worker_calendar = worker_calendar.reindex(['Worked', 'Donated'], level='Metric')
+        # 5. FIX: Ensure all workers have both a "Worked" and "Donated" row
+        all_workers_in_schedule = all_shifts_df['Név'].unique()
+        all_metrics = ['Worked', 'Donated']
+        complete_multi_index = pd.MultiIndex.from_product(
+            [all_workers_in_schedule, all_metrics],
+            names=['Név', 'Metric']
+        )
+        worker_calendar = worker_calendar.reindex(complete_multi_index, fill_value='')
+        
+        # 6. Ensure the calendar shows all days of the month
         if not all_shifts_df.empty:
             month_start = all_shifts_df['Date'].min()
             days_in_month = pd.Period(month_start, 'M').days_in_month
