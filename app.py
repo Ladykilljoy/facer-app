@@ -66,9 +66,9 @@ def process_files(donations_file, names_file, workhours_file):
         final_df.fillna(0, inplace=True)
         final_df.replace([np.inf, -np.inf], 0, inplace=True)
 
-        # --- Sheet 2: Worker Calendar Logic ---
+        # --- Sheet 2: Worker Calendar Logic (NEW RUNNING COUNT) ---
         
-        # 1. Get a clean list of all shifts
+        # 1. Get clean work and donation data
         workhours_df[0] = workhours_df[0].ffill()
         all_shifts = []
         for index, row in workhours_df.iterrows():
@@ -79,51 +79,61 @@ def process_files(donations_file, names_file, workhours_file):
                         name = str(row[col]).strip()
                         if name and name not in ['---', 'nan']:
                             all_shifts.append({'Név': name, 'Date': date})
-        
         all_shifts_df = pd.DataFrame(all_shifts).drop_duplicates()
         all_shifts_df['Date'] = pd.to_datetime(all_shifts_df['Date'])
         
-        # 2. Get a clean list of donation events
         donations_df['Transaction Date'] = pd.to_datetime(donations_df['Transaction Date'], dayfirst=True)
         donations_with_names = pd.merge(donations_df, names_df, left_on='Campaign: Campaign Name', right_on='Campaign name')
-        all_donations_df = donations_with_names[['Név', 'Transaction Date']].drop_duplicates()
-        all_donations_df.rename(columns={'Transaction Date': 'Date'}, inplace=True)
+        donation_dates_by_worker = donations_with_names.groupby('Név')['Transaction Date'].apply(lambda x: set(x.dt.date))
         
-        # 3. Create "event" tables for pivoting
-        worked_events = all_shifts_df.copy()
-        worked_events['Metric'] = 'Worked'
-        worked_events['Value'] = '✓'
-        worked_events['Day'] = worked_events['Date'].dt.day
-
-        donated_events = all_donations_df.copy()
-        donated_events['Metric'] = 'Donated'
-        donated_events['Value'] = '✓'
-        donated_events['Day'] = donated_events['Date'].dt.day
+        # 2. Iteratively build the calendar with the running count
+        calendar_data = {}
+        all_workers_in_schedule = sorted(all_shifts_df['Név'].unique())
         
-        # 4. Combine events and pivot to create the calendar
-        calendar_events = pd.concat([worked_events, donated_events])
-        worker_calendar = calendar_events.pivot_table(
-            index=['Név', 'Metric'], 
-            columns='Day', 
-            values='Value', 
-            aggfunc='first',
-            fill_value=''
-        )
-        
-        # 5. FIX: Ensure all workers have both a "Worked" and "Donated" row
-        all_workers_in_schedule = all_shifts_df['Név'].unique()
-        all_metrics = ['Worked', 'Donated']
-        complete_multi_index = pd.MultiIndex.from_product(
-            [all_workers_in_schedule, all_metrics],
-            names=['Név', 'Metric']
-        )
-        worker_calendar = worker_calendar.reindex(complete_multi_index, fill_value='')
-        
-        # 6. Ensure the calendar shows all days of the month
         if not all_shifts_df.empty:
-            month_start = all_shifts_df['Date'].min()
+            month_start = all_shifts_df['Date'].min().replace(day=1)
             days_in_month = pd.Period(month_start, 'M').days_in_month
-            worker_calendar = worker_calendar.reindex(columns=range(1, days_in_month + 1), fill_value='')
+            month_dates = [month_start + pd.Timedelta(days=i) for i in range(days_in_month)]
+
+            for worker in all_workers_in_schedule:
+                worker_work_dates = set(all_shifts_df[all_shifts_df['Név'] == worker]['Date'].dt.date)
+                worker_donation_dates = donation_dates_by_worker.get(worker, set())
+                
+                worked_row = {}
+                donated_row = {}
+                consecutive_zeros_count = 0
+
+                for date in month_dates:
+                    day = date.day
+                    had_donation_today = date.date() in worker_donation_dates
+                    had_shift_today = date.date() in worker_work_dates
+
+                    # Any donation (even on non-workdays) resets the counter
+                    if had_donation_today:
+                        consecutive_zeros_count = 0
+                    
+                    # Populate the "Donated" row
+                    donated_row[day] = '✓' if had_donation_today else ''
+                    
+                    # Populate the "Worked" row with the running count logic
+                    if had_shift_today:
+                        if had_donation_today:
+                            worked_row[day] = 0
+                        else:
+                            consecutive_zeros_count += 1
+                            worked_row[day] = consecutive_zeros_count
+                    else:
+                        worked_row[day] = ''
+
+                calendar_data[(worker, 'Worked')] = worked_row
+                calendar_data[(worker, 'Donated')] = donated_row
+
+        # 3. Create DataFrame from the generated data
+        worker_calendar = pd.DataFrame.from_dict(calendar_data, orient='index')
+        if not worker_calendar.empty:
+             worker_calendar.index = pd.MultiIndex.from_tuples(worker_calendar.index, names=['Név', 'Metric'])
+             worker_calendar.sort_index(inplace=True)
+             worker_calendar = worker_calendar.reindex(columns=range(1, days_in_month + 1), fill_value='')
 
         # --- Final Output Generation ---
         output_df = final_df[['Név', 'Total Hours', 'Number of Donations', 'Total Donation Amount', 'Total Wage', 'Donations (Count) / Hour', 'ROI']]
@@ -144,7 +154,6 @@ def process_files(donations_file, names_file, workhours_file):
 
 # --- Streamlit App Interface (Unchanged) ---
 st.set_page_config(page_title="Donation Statistics Generator", layout="centered")
-
 st.title("📊 Donation Statistics Generator")
 st.write("Upload the three required Excel files to generate the performance report.")
 
