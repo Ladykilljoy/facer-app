@@ -36,7 +36,6 @@ def process_files(donations_file, names_file, workhours_file):
         workhours_df = pd.read_excel(workhours_file, header=None)
 
         # --- Sheet 1: Main Performance Report Logic ---
-        # Clean and Process Donations Data
         donations_df.columns = donations_df.columns.str.strip()
         donations_df = donations_df.iloc[:-3]
         donations_df['Amount'] = pd.to_numeric(donations_df['Amount'], errors='coerce')
@@ -45,7 +44,6 @@ def process_files(donations_file, names_file, workhours_file):
         donations_count = donations_df.groupby('Campaign: Campaign Name').size().reset_index(name='Number of Donations')
         donations_count.rename(columns={'Campaign: Campaign Name': 'Campaign name'}, inplace=True)
 
-        # Calculate Hours Worked
         hours_per_person = {}
         for index, row in workhours_df.iterrows():
             time_str = row[3]
@@ -58,7 +56,6 @@ def process_files(donations_file, names_file, workhours_file):
                         hours_per_person[name] = hours_per_person.get(name, 0) + shift_hours
         hours_df = pd.DataFrame(list(hours_per_person.items()), columns=['Név', 'Total Hours'])
 
-        # Merge and Calculate Metrics
         final_df = pd.merge(names_df, hours_df, on='Név', how='left')
         final_df = pd.merge(final_df, donations_sum, on='Campaign name', how='left')
         final_df = pd.merge(final_df, donations_count, on='Campaign name', how='left')
@@ -71,8 +68,7 @@ def process_files(donations_file, names_file, workhours_file):
 
         # --- Sheet 2: Consecutive Zero-Donation Shifts Logic ---
         
-        # 1. Create a clean, chronological list of every shift for every worker
-        workhours_df[0] = workhours_df[0].ffill() # Forward-fill dates
+        workhours_df[0] = workhours_df[0].ffill()
         all_shifts = []
         for index, row in workhours_df.iterrows():
             date = row[0]
@@ -87,18 +83,18 @@ def process_files(donations_file, names_file, workhours_file):
         all_shifts_df['Date'] = pd.to_datetime(all_shifts_df['Date'])
         all_shifts_df.sort_values(by=['Név', 'Date'], inplace=True)
 
-        # 2. Get the set of dates each worker received donations
-        # FIX: Added dayfirst=True to correctly parse DD/MM/YYYY format
         donations_df['Transaction Date'] = pd.to_datetime(donations_df['Transaction Date'], dayfirst=True)
         donations_with_names = pd.merge(donations_df, names_df, left_on='Campaign: Campaign Name', right_on='Campaign name')
         donation_dates_by_worker = donations_with_names.groupby('Név')['Transaction Date'].apply(lambda x: set(x.dt.date))
 
-        # 3. Find workers with 3 consecutive shifts on zero-donation days
         consecutive_zeros_data = []
         unique_workers = all_shifts_df['Név'].unique()
 
         for worker in unique_workers:
             worker_shifts = all_shifts_df[all_shifts_df['Név'] == worker].copy()
+            # FIX: Reset the index to prevent out-of-bounds errors on the slice
+            worker_shifts.reset_index(drop=True, inplace=True)
+            
             worker_donation_dates = donation_dates_by_worker.get(worker, set())
             
             worker_shifts['is_zero_day'] = worker_shifts['Date'].apply(lambda d: d.date() not in worker_donation_dates)
@@ -108,6 +104,7 @@ def process_files(donations_file, names_file, workhours_file):
             flagged_indices = worker_shifts[worker_shifts['consecutive_zeros'] == 3.0].index
             
             for idx in flagged_indices:
+                # Now that the index is reset, this slice is safe
                 three_shifts = worker_shifts.loc[idx-2:idx]
                 consecutive_zeros_data.append({
                     'Worker Name': worker,
