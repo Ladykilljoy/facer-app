@@ -36,8 +36,6 @@ def process_files(donations_file, names_file, workhours_file):
         workhours_df = pd.read_excel(workhours_file, header=None)
 
         # --- Sheet 1: Main Performance Report Logic ---
-        # (This section is mostly unchanged)
-        
         # Clean and Process Donations Data
         donations_df.columns = donations_df.columns.str.strip()
         donations_df = donations_df.iloc[:-3]
@@ -90,7 +88,8 @@ def process_files(donations_file, names_file, workhours_file):
         all_shifts_df.sort_values(by=['Név', 'Date'], inplace=True)
 
         # 2. Get the set of dates each worker received donations
-        donations_df['Transaction Date'] = pd.to_datetime(donations_df['Transaction Date'])
+        # FIX: Added dayfirst=True to correctly parse DD/MM/YYYY format
+        donations_df['Transaction Date'] = pd.to_datetime(donations_df['Transaction Date'], dayfirst=True)
         donations_with_names = pd.merge(donations_df, names_df, left_on='Campaign: Campaign Name', right_on='Campaign name')
         donation_dates_by_worker = donations_with_names.groupby('Név')['Transaction Date'].apply(lambda x: set(x.dt.date))
 
@@ -104,7 +103,6 @@ def process_files(donations_file, names_file, workhours_file):
             
             worker_shifts['is_zero_day'] = worker_shifts['Date'].apply(lambda d: d.date() not in worker_donation_dates)
             
-            # Use a rolling window to check for 3 consecutive True values
             worker_shifts['consecutive_zeros'] = worker_shifts['is_zero_day'].rolling(window=3).sum()
             
             flagged_indices = worker_shifts[worker_shifts['consecutive_zeros'] == 3.0].index
@@ -121,12 +119,9 @@ def process_files(donations_file, names_file, workhours_file):
         zeros_df = pd.DataFrame(consecutive_zeros_data)
 
         # --- Final Output Generation ---
-        
-        # Prepare the main report sheet
         output_df = final_df[['Név', 'Total Hours', 'Number of Donations', 'Total Donation Amount', 'Total Wage', 'Donations (Count) / Hour', 'ROI']]
         output_df.rename(columns={'Név': 'Worker Name', 'Total Donation Amount': 'Total Donations (HUF)'}, inplace=True)
         
-        # Create an in-memory Excel file with two sheets
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
             output_df.to_excel(writer, index=False, sheet_name='Worker Performance')
@@ -140,7 +135,7 @@ def process_files(donations_file, names_file, workhours_file):
         st.error("Please ensure the uploaded files are in the correct format and all columns are present.")
         return None
 
-# --- Streamlit App Interface (No changes needed here) ---
+# --- Streamlit App Interface ---
 st.set_page_config(page_title="Donation Statistics Generator", layout="centered")
 
 st.title("📊 Donation Statistics Generator")
