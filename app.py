@@ -35,7 +35,7 @@ def process_files(donations_file, names_file, workhours_file):
         names_df = pd.read_excel(names_file)
         workhours_df = pd.read_excel(workhours_file, header=None)
 
-        # --- Sheet 1: Main Performance Report Logic ---
+        # --- Sheet 1: Main Performance Report Logic (Unchanged) ---
         donations_df.columns = donations_df.columns.str.strip()
         donations_df = donations_df.iloc[:-3]
         donations_df['Amount'] = pd.to_numeric(donations_df['Amount'], errors='coerce')
@@ -66,94 +66,41 @@ def process_files(donations_file, names_file, workhours_file):
         final_df.fillna(0, inplace=True)
         final_df.replace([np.inf, -np.inf], 0, inplace=True)
 
-        # --- Sheet 2: Consecutive Zero-Donation Shifts Logic ---
+        # --- Sheet 2: Worker Calendar Logic (NEW) ---
         
+        # 1. Get a clean list of all shifts
         workhours_df[0] = workhours_df[0].ffill()
         all_shifts = []
         for index, row in workhours_df.iterrows():
             date = row[0]
-            time = row[3]
-            if pd.isna(time): continue
-            for col in [4, 5, 6]:
-                if pd.notna(row[col]):
-                    name = str(row[col]).strip()
-                    if name and name not in ['---', 'nan']:
-                        all_shifts.append({'Date': date, 'Time': time, 'Név': name})
-        all_shifts_df = pd.DataFrame(all_shifts)
+            if pd.notna(date) and pd.notna(row[3]):
+                for col in [4, 5, 6]:
+                    if pd.notna(row[col]):
+                        name = str(row[col]).strip()
+                        if name and name not in ['---', 'nan']:
+                            all_shifts.append({'Név': name, 'Date': date})
+        
+        all_shifts_df = pd.DataFrame(all_shifts).drop_duplicates()
         all_shifts_df['Date'] = pd.to_datetime(all_shifts_df['Date'])
-        all_shifts_df.sort_values(by=['Név', 'Date'], inplace=True)
-
+        
+        # 2. Get a clean list of donation events
         donations_df['Transaction Date'] = pd.to_datetime(donations_df['Transaction Date'], dayfirst=True)
         donations_with_names = pd.merge(donations_df, names_df, left_on='Campaign: Campaign Name', right_on='Campaign name')
-        donation_dates_by_worker = donations_with_names.groupby('Név')['Transaction Date'].apply(lambda x: set(x.dt.date))
-
-        consecutive_zeros_data = []
-        unique_workers = all_shifts_df['Név'].unique()
-
-        for worker in unique_workers:
-            worker_shifts = all_shifts_df[all_shifts_df['Név'] == worker].copy()
-            # FIX: Reset the index to prevent out-of-bounds errors on the slice
-            worker_shifts.reset_index(drop=True, inplace=True)
-            
-            worker_donation_dates = donation_dates_by_worker.get(worker, set())
-            
-            worker_shifts['is_zero_day'] = worker_shifts['Date'].apply(lambda d: d.date() not in worker_donation_dates)
-            
-            worker_shifts['consecutive_zeros'] = worker_shifts['is_zero_day'].rolling(window=3).sum()
-            
-            flagged_indices = worker_shifts[worker_shifts['consecutive_zeros'] == 3.0].index
-            
-            for idx in flagged_indices:
-                # Now that the index is reset, this slice is safe
-                three_shifts = worker_shifts.loc[idx-2:idx]
-                consecutive_zeros_data.append({
-                    'Worker Name': worker,
-                    'Shift 1': f"{three_shifts.iloc[0]['Date'].strftime('%Y-%m-%d')} ({three_shifts.iloc[0]['Time']})",
-                    'Shift 2': f"{three_shifts.iloc[1]['Date'].strftime('%Y-%m-%d')} ({three_shifts.iloc[1]['Time']})",
-                    'Shift 3': f"{three_shifts.iloc[2]['Date'].strftime('%Y-%m-%d')} ({three_shifts.iloc[2]['Time']})"
-                })
-
-        zeros_df = pd.DataFrame(consecutive_zeros_data)
-
-        # --- Final Output Generation ---
-        output_df = final_df[['Név', 'Total Hours', 'Number of Donations', 'Total Donation Amount', 'Total Wage', 'Donations (Count) / Hour', 'ROI']]
-        output_df.rename(columns={'Név': 'Worker Name', 'Total Donation Amount': 'Total Donations (HUF)'}, inplace=True)
+        all_donations_df = donations_with_names[['Név', 'Transaction Date']].drop_duplicates()
+        all_donations_df.rename(columns={'Transaction Date': 'Date'}, inplace=True)
         
-        output = io.BytesIO()
-        with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            output_df.to_excel(writer, index=False, sheet_name='Worker Performance')
-            zeros_df.to_excel(writer, index=False, sheet_name='Consecutive Zero-Donation Shifts')
+        # 3. Create "event" tables for pivoting
+        worked_events = all_shifts_df.copy()
+        worked_events['Metric'] = 'Worked'
+        worked_events['Value'] = '✓'
+        worked_events['Day'] = worked_events['Date'].dt.day
+
+        donated_events = all_donations_df.copy()
+        donated_events['Metric'] = 'Donated'
+        donated_events['Value'] = '✓'
+        donated_events['Day'] = donated_events['Date'].dt.day
         
-        processed_data = output.getvalue()
-        return processed_data
-
-    except Exception as e:
-        st.error(f"An error occurred: {e}")
-        st.error("Please ensure the uploaded files are in the correct format and all columns are present.")
-        return None
-
-# --- Streamlit App Interface ---
-st.set_page_config(page_title="Donation Statistics Generator", layout="centered")
-
-st.title("📊 Donation Statistics Generator")
-st.write("Upload the three required Excel files to generate the performance report.")
-
-donations_file = st.file_uploader("📁 1. Upload Donations File", type=["xlsx"])
-names_file = st.file_uploader("📁 2. Upload Names File", type=["xlsx"])
-workhours_file = st.file_uploader("📁 3. Upload Work Hours File", type=["xlsx"])
-
-if st.button("🚀 Generate Report"):
-    if donations_file and names_file and workhours_file:
-        with st.spinner("Processing files... this may take a moment."):
-            excel_data = process_files(donations_file, names_file, workhours_file)
-
-        if excel_data:
-            st.success("✅ Report generated successfully!")
-            st.download_button(
-                label="📥 Download Report",
-                data=excel_data,
-                file_name="worker_statistics_report.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
-    else:
-        st.warning("⚠️ Please upload all three files to generate the report.")
+        # 4. Combine events and pivot to create the calendar
+        calendar_events = pd.concat([worked_events, donated_events])
+        worker_calendar = calendar_events.pivot_table(
+            index=['N
