@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import io
 import matplotlib.pyplot as plt
+import re
 
 # Try to import lifelines; show a friendly note if it's missing.
 try:
@@ -344,4 +345,5 @@ with tab2:
 
                     except Exception as e:
                         st.exception(e)
+
 
