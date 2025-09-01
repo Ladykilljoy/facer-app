@@ -57,7 +57,7 @@ def process_files(donations_file, names_file, workhours_file):
             time_str = row[3]
             if pd.isna(time_str): continue
             shift_hours = get_shift_hours(time_str)
-            for col in [4, 5, 6]:
+            for col in [4, 5, 6, 7]:
                 if pd.notna(row[col]):
                     name = str(row[col]).strip()
                     if name and name not in ['---', 'nan']:
@@ -346,6 +346,7 @@ with tab2:
 
                     except Exception as e:
                         st.exception(e)
+
 
 
 
